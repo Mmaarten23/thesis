@@ -49,16 +49,11 @@ lem MinimalRefCell_send<T>(t1: thread_id_t)
 fix Narc() -> *u8 { 42 as *u8 }
 fix Marc() -> mask_t { MaskSingle(Narc) }
 
-pred_ctor dlft_pred(dk: lifetime_t)(gid: isize; destroyed: bool) = ghost_cell(gid, destroyed) &*& if destroyed { true } else { lifetime_token(dk) };
-
-pred_ctor ticket_(dk: lifetime_t, gid: isize, frac: real)(;) = ticket(dlft_pred(dk), gid, frac) &*& [frac]ghost_cell(gid, false);
-
-pred_ctor MinimalRefCell_inv<T>(dk: lifetime_t, ptr: *MinimalRefCell<T>, gid: isize)() =
-    counting(dlft_pred(dk), gid, ?n, ?destroyed) &*&
-    if n <= 0 { true }
-    else { 
-        (*ptr).mutable_borrowed |-> ?borrowed &*&
-        (*ptr).value |-> ?val
+pred_ctor MinimalRefCell_na_inv<T>(dk: lifetime_t, ptr: *MinimalRefCell<T>, gid: isize, t: thread_id_t)() =
+    (*ptr).mutable_borrowed |-> ?borrowed &*&
+    if borrowed { true }
+    else {
+        borrow_end_token(dk, <T>.full_borrow_content(t, &(*ptr).value))
     };
 
 pred<T> <MinimalRefCell<T>>.share(k, t, l) =
@@ -66,21 +61,12 @@ pred<T> <MinimalRefCell<T>>.share(k, t, l) =
     l == ptr &*&
 
     [_]exists(?gid) &*& [_]exists(?dk) &*& 
-
-    [_]atomic_space(Marc, MinimalRefCell_inv(dk, ptr, gid)) &*&
-    
+    [_]na_inv(t, Marc(), MinimalRefCell_na_inv(dk, ptr, gid, t)) &*&
     [_]exists(?frac) &*&
-    [_]frac_borrow(k, ticket_(dk, gid, frac)) &*&
     [_]frac_borrow(k, lifetime_token_(frac, dk)) &*&
-    
-    [_](<T>.share)(dk, default_tid, &(*ptr).value) &*&
-    (*l).mutable_borrowed |-> ?borrowed;
-    // &*&
-
-    
-    // Ensures the value pointer is valid and within memory limits.
-    //pointer_within_limits(&(*ptr).value) == true &*&
-    //pointer_within_limits(&(*ptr).mutable_borrowed) == true;
+    [_](<T>.share(dk, t, &(*ptr).value)) &*&
+    pointer_within_limits(&(*ptr).value) == true &*&
+    pointer_within_limits(&(*ptr).mutable_borrowed) == true;
 @*/
 
 
@@ -98,15 +84,24 @@ impl<T> MinimalRefCell<T> {
     pub fn borrow_mut<'a>(this: &'a Self) -> MinimalRefMut<'a, T> {
         //@ open MinimalRefCell_share::<T>()('a, _t, this);
         unsafe {
+        //@ assert [_]exists::<lifetime_t>(?dk) &*& [_]exists::<isize>(?gid);
+        //@ open thread_token(_t);
+        //@ open_na_inv(_t, Marc(), MinimalRefCell_na_inv(dk, this, gid, _t));
+        //@ open MinimalRefCell_na_inv::<T>(dk, this, gid, _t)();
             if *this.mutable_borrowed.get() == false {
-            // open atomic_space(Marc, MinimalRefCell_inv(_t, dk, ptr, gid));
                 *this.mutable_borrowed.get() = true;
             } else {
                 process::abort();
             }
         }
+        //@ close MinimalRefCell_na_inv::<T>(dk, this, gid, _t)();
+        //@ close_na_inv(_t, Marc());
+        //@ thread_token_merge(_t, Marc(), mask_diff(MaskTop, Marc()));
+        //@ close thread_token(_t);
         // Return a MinimalRefMut object that will reset the mutable_borrowed flag when dropped
-        MinimalRefMut { refcell: this }
+        //@ close MinimalRefCell_share::<T>()('a, _t, this);
+        let r = MinimalRefMut { refcell: this };
+        r
     }
 }
 
