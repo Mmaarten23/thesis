@@ -28,8 +28,10 @@ lem MinimalRefCell_send<T>(t1: thread_id_t)
 }
 pred<T> <MinimalRefCell<T>>.own(t, cell) = <T>.own(t, cell.value);
 
-pred_ctor nonatomic_borrow_content<T>(ptr: *MinimalRefCell<T>, t: thread_id_t, kv: lifetime_t)() =
+pred_ctor nonatomic_borrow_content<T>(ptr: *MinimalRefCell<T>, t: thread_id_t, k: lifetime_t)() =
     MinimalRefCell_mutable_borrowed(ptr, ?borrowed) &*&
+    [_]exists(?kv) &*&
+    lifetime_inclusion(k, kv) == true &*&
     if borrowed { true }
     else {
         full_borrow(kv, <T>.full_borrow_content(t, &(*ptr).value))
