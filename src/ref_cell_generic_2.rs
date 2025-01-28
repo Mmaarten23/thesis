@@ -8,25 +8,11 @@ use std::process;
  * that supports only mutable borrows (borrow_mut), using only UnsafeCell.
  */
 pub struct MinimalRefCell<T> {
-    value: UnsafeCell<T>,          // The value being stored. Mutable even when the RefCell is immutable.
+    value: UnsafeCell<T>, // The value being stored. Mutable even when the RefCell is immutable.
     mutable_borrowed: UnsafeCell<bool>, // Tracks whether a mutable borrow is active, using UnsafeCell for interior mutability.
 }
 
 /*@
-lem MinimalRefCell_share_mono<T>(k: lifetime_t, k1: lifetime_t, t: thread_id_t, l: *_)
-    req type_interp::<T>() &*& lifetime_inclusion(k1, k) == true &*& [_]MinimalRefCell_share::<T>(k, t, l);
-    ens type_interp::<T>() &*& [_]MinimalRefCell_share::<T>(k1, t, l);
-{
-    assume(false);
-}
-
-lem MinimalRefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *_)
-    req type_interp::<T>() &*& atomic_mask(Nlft) &*& full_borrow(k, MinimalRefCell_full_borrow_content::<T>(t, l)) &*& [?q]lifetime_token(k);
-    ens type_interp::<T>() &*& atomic_mask(Nlft) &*& [_]MinimalRefCell_share::<T>(k, t, l) &*& [q]lifetime_token(k);
-{
-    assume(false);
-}
-
 lem init_ref_MinimalRefCell<T>(p: *MinimalRefCell<T>)
     req type_interp::<T>() &*& atomic_mask(Nlft) &*& ref_init_perm(p, ?x) &*& [_]MinimalRefCell_share::<T>(?k, ?t, x) &*& [?q]lifetime_token(k);
     ens type_interp::<T>() &*& atomic_mask(Nlft) &*& [q]lifetime_token(k) &*& [_]MinimalRefCell_share::<T>(k, t, p) &*& [_]frac_borrow(k, ref_initialized_(p));
@@ -40,42 +26,62 @@ lem MinimalRefCell_send<T>(t1: thread_id_t)
 {
     assume(false);
 }
+pred<T> <MinimalRefCell<T>>.own(t, cell) = <T>.own(t, cell.value);
 
-    pred<T> <MinimalRefCell<T>>.own(t, cell) = <T>.own(t, cell.value) &*& bool_own(t, cell.mutable_borrowed);
-@*/
- 
-/*@
-
-fix Narc() -> *u8 { 42 as *u8 }
-fix Marc() -> mask_t { MaskSingle(Narc) }
-
-pred_ctor MinimalRefCell_na_inv<T>(dk: lifetime_t, ptr: *MinimalRefCell<T>, gid: isize, t: thread_id_t)() =
-    (*ptr).mutable_borrowed |-> ?borrowed &*&
+pred_ctor nonatomic_borrow_content<T>(ptr: *MinimalRefCell<T>, t: thread_id_t, kv: lifetime_t)() =
+    MinimalRefCell_mutable_borrowed(ptr, ?borrowed) &*&
+    pointer_within_limits(&(*ptr).mutable_borrowed) == true &*&
     if borrowed { true }
     else {
-        borrow_end_token(dk, <T>.full_borrow_content(t, &(*ptr).value))
+        full_borrow(kv, <T>.full_borrow_content(t, &(*ptr).value))
     };
 
 pred<T> <MinimalRefCell<T>>.share(k, t, l) =
-    [_]exists(?ptr) &*&
-    l == ptr &*&
+    [_]exists(?dk) &*&
+    [_]nonatomic_borrow(k, t, MaskNshrSingle(l), nonatomic_borrow_content(l, t, dk));
 
-    [_]exists(?gid) &*& [_]exists(?dk) &*& 
-    [_]na_inv(t, Marc(), MinimalRefCell_na_inv(dk, ptr, gid, t)) &*&
-    [_]exists(?frac) &*&
-    [_]frac_borrow(k, lifetime_token_(frac, dk)) &*&
-    [_](<T>.share(dk, t, &(*ptr).value)) &*&
-    pointer_within_limits(&(*ptr).value) == true &*&
-    pointer_within_limits(&(*ptr).mutable_borrowed) == true;
+
+lem MinimalRefCell_share_mono<T>(k: lifetime_t, k1: lifetime_t, t: thread_id_t, l: *MinimalRefCell<T>)
+    req type_interp::<T>() &*& lifetime_inclusion(k1, k) == true &*& [_]MinimalRefCell_share::<T>(k, t, l);
+    ens type_interp::<T>() &*& [_]MinimalRefCell_share::<T>(k1, t, l);
+{
+    open [?df]MinimalRefCell_share::<T>(k, t, l);
+    assert [_]nonatomic_borrow(k, t, ?m, _) &*& [_]exists(?dk);
+    nonatomic_borrow_mono(k, k1, t, m, nonatomic_borrow_content(l, t, dk));
+    close [df]MinimalRefCell_share::<T>(k1, t, l);
+}
+
+lem MinimalRefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *MinimalRefCell<T>)
+    req type_interp::<T>() &*& atomic_mask(Nlft) &*& full_borrow(k, MinimalRefCell_full_borrow_content::<T>(t, l)) &*& [?q]lifetime_token(k);
+    ens type_interp::<T>() &*& atomic_mask(Nlft) &*& [_]MinimalRefCell_share::<T>(k, t, l) &*& [q]lifetime_token(k);
+{
+    produce_lem_ptr_chunk implies(MinimalRefCell_full_borrow_content(t, l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutable_borrowed)))() {
+        open MinimalRefCell_full_borrow_content::<T>(t, l)();
+        assert (*l).value |-> ?value &*& (*l).mutable_borrowed |-> ?mutable_borrowed;
+        open MinimalRefCell_own::<T>()(t, MinimalRefCell::<T> { value, mutable_borrowed });
+
+        close_full_borrow_content::<T>(t, &(*l).value);
+        close bool_full_borrow_content(t, &(*l).mutable_borrowed)();
+        close sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutable_borrowed))();
+    } {
+        produce_lem_ptr_chunk implies(sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutable_borrowed)), MinimalRefCell_full_borrow_content(t, l))() {
+            open sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutable_borrowed))();
+            close MinimalRefCell_full_borrow_content::<T>(t, l)();
+        } {
+            full_borrow_implies(k, MinimalRefCell_full_borrow_content(t, l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutable_borrowed)));
+        }
+    }
+    full_borrow_split_m(k, <T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutable_borrowed)); // LFTL-BOR-SPLIT
+    let lifetime = open_full_borrow_strong_m(k, bool_full_borrow_content::<T>(t, &(*l).mutable_borrowed), q); // LFTL-BOR-ACC-STRONG
+
+}
 @*/
-
-
 
 impl<T> MinimalRefCell<T> {
     pub fn new(value: T) -> Self {
         let r = MinimalRefCell {
-        	value: UnsafeCell::new(value), 
-        	mutable_borrowed: UnsafeCell::new(false)
+            value: UnsafeCell::new(value),
+            mutable_borrowed: UnsafeCell::new(false),
         };
         //@ close MinimalRefCell_own::<T>(_t, r);
         r
@@ -84,23 +90,27 @@ impl<T> MinimalRefCell<T> {
     pub fn borrow_mut<'a>(this: &'a Self) -> MinimalRefMut<'a, T> {
         //@ open MinimalRefCell_share::<T>()('a, _t, this);
         unsafe {
-        //@ assert [_]exists::<lifetime_t>(?dk) &*& [_]exists::<isize>(?gid);
-        //@ open thread_token(_t);
-        //@ open_na_inv(_t, Marc(), MinimalRefCell_na_inv(dk, this, gid, _t));
-        //@ open MinimalRefCell_na_inv::<T>(dk, this, gid, _t)();
+            //@ assert [_]exists::<lifetime_t>(?dk);
+            //@ assert [_]nonatomic_borrow('a, _t, ?mask, nonatomic_borrow_content(this, _t, dk));
+            //@ open thread_token(_t);
+            //@ thread_token_split(_t, MaskTop, mask);
+            //@ open_nonatomic_borrow('a, _t, mask, _q_a);
+            //@ open nonatomic_borrow_content::<T>(this, _t, dk)();
             if *this.mutable_borrowed.get() == false {
                 *this.mutable_borrowed.get() = true;
             } else {
                 process::abort();
             }
         }
-        //@ close MinimalRefCell_na_inv::<T>(dk, this, gid, _t)();
-        //@ close_na_inv(_t, Marc());
-        //@ thread_token_merge(_t, Marc(), mask_diff(MaskTop, Marc()));
+        //@ assert partial_thread_token(_t, ?mask0);
+        //@ close nonatomic_borrow_content::<T>(this, _t, dk)();
+        //@ close_nonatomic_borrow();
+        //@ thread_token_merge(_t, mask0, mask);
         //@ close thread_token(_t);
         // Return a MinimalRefMut object that will reset the mutable_borrowed flag when dropped
         //@ close MinimalRefCell_share::<T>()('a, _t, this);
         let r = MinimalRefMut { refcell: this };
+        //@ close MinimalRefMut_own::<'a, T>(_t, r);
         r
     }
 }
@@ -117,10 +127,31 @@ impl<T> Drop for MinimalRefCell<T> {
     }
 }
 
+/*
+pred<'a, T> <MinimalRefMut<'a, T>>.own(t, cell) = [_]exists(?kv) &*& full_borrow(kv, <T>.full_borrow_content(t, &(*cell.refcell).value));
+@*/
 // Struct to represent a mutable borrow
-pub struct MinimalRefMut<'a, T: 'a> {
+pub struct MinimalRefMut<'a, T> {
     refcell: &'a MinimalRefCell<T>,
 }
+
+/*@
+
+lem MinimalRefMut_own_mono<'a0, 'a1, T>()
+    req type_interp::<T>() &*& MinimalRefMut_own::<'a0, T>(?t, ?v) &*& lifetime_inclusion('a1, 'a0) == true;
+    ens type_interp::<T>() &*& MinimalRefMut_own::<'a1, T>(t, MinimalRefMut::<'a1, T> { refcell: v.refcell as *_ });
+{
+    assume(false);
+}
+
+lem MinimalRefMut_send<'a, T>(t1: thread_id_t)
+    req type_interp::<T>() &*& MinimalRefMut_own::<'a, T>(?t0, ?v);
+    ens type_interp::<T>() &*& MinimalRefMut_own::<'a, T>(t1, v);
+{
+    assume(false);
+}
+
+@*/
 
 // When dropped, reset the mutable_borrowed flag
 impl<'a, T> Drop for MinimalRefMut<'a, T> {
