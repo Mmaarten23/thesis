@@ -13,6 +13,7 @@ pub struct MinimalRefCell<T> {
 }
 
 /*@
+pred True(;) = true;
 lem init_ref_MinimalRefCell<T>(p: *MinimalRefCell<T>)
     req type_interp::<T>() &*& atomic_mask(Nlft) &*& ref_init_perm(p, ?x) &*& [_]MinimalRefCell_share::<T>(?k, ?t, x) &*& [?q]lifetime_token(k);
     ens type_interp::<T>() &*& atomic_mask(Nlft) &*& [q]lifetime_token(k) &*& [_]MinimalRefCell_share::<T>(k, t, p) &*& [_]frac_borrow(k, ref_initialized_(p));
@@ -30,15 +31,17 @@ pred<T> <MinimalRefCell<T>>.own(t, cell) = <T>.own(t, cell.value);
 
 pred_ctor nonatomic_borrow_content<T>(ptr: *MinimalRefCell<T>, t: thread_id_t, k: lifetime_t)() =
     MinimalRefCell_mutable_borrowed(ptr, ?borrowed) &*&
-    [_]exists(?kv) &*&
-    lifetime_inclusion(k, kv) == true &*&
+    exists(?kv) &*&
+    lifetime_inclusion(kv, k) == true &*&
+    pointer_within_limits(&(*ptr).mutable_borrowed) == true &*&
+    pointer_within_limits(&(*ptr).value) == true &*&
     if borrowed { true }
     else {
         full_borrow(kv, <T>.full_borrow_content(t, &(*ptr).value))
     };
 
 pred<T> <MinimalRefCell<T>>.share(k, t, l) =
-    [_]exists(?dk) &*&
+    exists(?dk) &*&
     [_]nonatomic_borrow(k, t, MaskNshrSingle(l), nonatomic_borrow_content(l, t, dk));
 
 
@@ -83,14 +86,37 @@ lem MinimalRefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *MinimalRefCe
     }
     full_borrow_split_m(k, MinimalRefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutable_borrowed)));
     full_borrow_split_m(k, <T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutable_borrowed)); // LFTL-BOR-SPLIT
-    let lifetime = open_full_borrow_strong_m(k, bool_full_borrow_content(t, &(*l).mutable_borrowed), q); // LFTL-BOR-ACC-STRONG
-    open bool_full_borrow_content(t, &(*l).mutable_borrowed)();
-    close nonatomic_borrow_content::<T>(l, t, lifetime)();
-    full_borrow_into_nonatomic_borrow_m(k, t, MaskNshrSingle(l), nonatomic_borrow_content(l, t, lifetime));
-    close exists(k);
-    leak exists(k);
-    close MinimalRefCell_share::<T>(k, t, l);
+    open_full_borrow_m(q, k, <T>.full_borrow_content(t, &(*l).value));
+    open_full_borrow_content(t, &(*l).value);
+    points_to_limits(&(*l).value);
+    close_full_borrow_content(t, &(*l).value);
+    close_full_borrow_m(<T>.full_borrow_content(t, &(*l).value));
 
+
+    let kstrong = open_full_borrow_strong_m(k, bool_full_borrow_content(t, &(*l).mutable_borrowed), q); // LFTL-BOR-ACC-STRONG
+    produce_lem_ptr_chunk full_borrow_convert_strong(True, nonatomic_borrow_content(l, t, k), kstrong, bool_full_borrow_content(t, &(*l).mutable_borrowed))() {
+        open nonatomic_borrow_content::<T>(l, t, k)();
+        if (*l).mutable_borrowed == false {
+            leak full_borrow(_, <T>.full_borrow_content(t, &(*l).value));
+        }
+        close bool_full_borrow_content(t, &(*l).mutable_borrowed)();
+    }{
+        open bool_full_borrow_content(t, &(*l).mutable_borrowed)();
+        close exists(k);
+
+        if (*l).mutable_borrowed == true {
+            leak full_borrow(_, <T>.full_borrow_content(t, &(*l).value));
+        }
+        points_to_limits(&(*l).mutable_borrowed);
+        close nonatomic_borrow_content::<T>(l, t, k)();
+        close_full_borrow_strong_m(kstrong, bool_full_borrow_content(t, &(*l).mutable_borrowed), nonatomic_borrow_content(l, t, k));
+        full_borrow_into_nonatomic_borrow_m(kstrong, t, MaskNshrSingle(l), nonatomic_borrow_content(l, t, k));
+        nonatomic_borrow_mono(kstrong, k, t, MaskNshrSingle(l), nonatomic_borrow_content(l, t, k));
+        close exists(k);
+        close MinimalRefCell_share::<T>(k, t, l);
+        leak MinimalRefCell_share::<T>(k, t, l);
+        leak full_borrow(k, MinimalRefCell_padding(l));
+    }
 }
 @*/
 
@@ -125,7 +151,8 @@ impl<T> MinimalRefCell<T> {
         //@ thread_token_merge(_t, mask0, mask);
         //@ close thread_token(_t);
         // Return a MinimalRefMut object that will reset the mutable_borrowed flag when dropped
-        //@ close MinimalRefCell_share::<T>()('a, _t, this);
+        //@ assert full_borrow(?kv, <T>.full_borrow_content(_t, &(*this).value));
+        //@ close exists(kv);
         let r = MinimalRefMut { refcell: this };
         //@ close MinimalRefMut_own::<'a, T>(_t, r);
         r
@@ -136,6 +163,8 @@ impl<T> Drop for MinimalRefCell<T> {
     // When the RefCell is dropped, check if it is still mutably borrowed.
     // If it is, abort.
     fn drop(&mut self) {
+        //@ open MinimalRefCell_full_borrow_content::<T>(_t, self)();
+        //@ open MinimalRefCell_own::<T>(_t, ?s);
         unsafe {
             if *self.mutable_borrowed.get() {
                 process::abort();
@@ -144,8 +173,12 @@ impl<T> Drop for MinimalRefCell<T> {
     }
 }
 
-/*
-pred<'a, T> <MinimalRefMut<'a, T>>.own(t, cell) = [_]exists(?kv) &*& full_borrow(kv, <T>.full_borrow_content(t, &(*cell.refcell).value));
+/*@
+pred<'a, T> <MinimalRefMut<'a, T>>.own(t, cell) =
+    exists(?kv) &*&
+    full_borrow(kv, <T>.full_borrow_content(t, &(*cell.refcell).value)) &*&
+    [_]exists(?dk) &*&
+    [_]nonatomic_borrow('a, t, MaskNshrSingle(cell.refcell), nonatomic_borrow_content::<T>(cell.refcell, t, dk));
 @*/
 // Struct to represent a mutable borrow
 pub struct MinimalRefMut<'a, T> {
@@ -173,8 +206,35 @@ lem MinimalRefMut_send<'a, T>(t1: thread_id_t)
 // When dropped, reset the mutable_borrowed flag
 impl<'a, T> Drop for MinimalRefMut<'a, T> {
     fn drop(&mut self) {
+        //@ open MinimalRefMut_full_borrow_content::<'a, T>(_t, self)();
+        //@ open MinimalRefMut_own::<'a, T>(_t, ?s);
         unsafe {
+            //@ assert [_]exists::<lifetime_t>(?dk);
+            //@ assert MinimalRefMut_refcell::<'a, T>(self, ?cell);
+            //@ assert [_]nonatomic_borrow('a, _t, ?mask, nonatomic_borrow_content(cell, _t, dk));
+            //@ open thread_token(_t);
+            //@ thread_token_split(_t, MaskTop, mask);
+            //@ open_nonatomic_borrow('a, _t, mask, _q_a);
+            //@ open nonatomic_borrow_content::<T>(cell, _t, dk)();
             *self.refcell.mutable_borrowed.get() = false;
+            //@ assert partial_thread_token(_t, ?mask0);
+            /*@
+            produce_lem_ptr_chunk implies(MinimalRefMut_full_borrow_content(_t, self), MinimalRefCell_full_borrow_content(_t, (*self).refcell))() {
+                open MinimalRefMut_full_borrow_content::<'a, T>(_t, self)();
+                open MinimalRefMut_own::<'a, T>(_t, *self);
+                close MinimalRefCell_full_borrow_content::<T>(_t, (*self).refcell)();
+            } {
+                produce_lem_ptr_chunk implies(MinimalRefCell_full_borrow_content(_t, (*self).refcell), MinimalRefMut_full_borrow_content(_t, self))() {
+                    
+                } {
+                    full_borrow_implies(k, MinimalRefMut_full_borrow_content(_t, self), MinimalRefCell_full_borrow_content(_t, (*self).refcell));
+                }
+            }
+            @*/
+            //@ close nonatomic_borrow_content::<T>(cell, _t, dk)();
+            //@ close_nonatomic_borrow();
+            //@ thread_token_merge(_t, mask0, mask);
+            //@ close thread_token(_t);
         }
     }
 }
