@@ -31,17 +31,16 @@ pred<T> <MinimalRefCell<T>>.own(t, cell) = <T>.own(t, cell.value);
 
 pred_ctor nonatomic_borrow_content<T>(ptr: *MinimalRefCell<T>, t: thread_id_t, k: lifetime_t)() =
     MinimalRefCell_mutable_borrowed(ptr, ?borrowed) &*&
-    exists(?kv) &*&
-    lifetime_inclusion(kv, k) == true &*&
     pointer_within_limits(&(*ptr).mutable_borrowed) == true &*&
     pointer_within_limits(&(*ptr).value) == true &*&
     if borrowed { true }
     else {
-        full_borrow(kv, <T>.full_borrow_content(t, &(*ptr).value))
+        full_borrow(k, <T>.full_borrow_content(t, &(*ptr).value))
     };
 
 pred<T> <MinimalRefCell<T>>.share(k, t, l) =
     exists(?dk) &*&
+    lifetime_inclusion(k, dk) == true &*&
     [_]nonatomic_borrow(k, t, MaskNshrSingle(l), nonatomic_borrow_content(l, t, dk));
 
 
@@ -52,6 +51,7 @@ lem MinimalRefCell_share_mono<T>(k: lifetime_t, k1: lifetime_t, t: thread_id_t, 
     open [?df]MinimalRefCell_share::<T>(k, t, l);
     assert [_]nonatomic_borrow(k, t, ?m, _) &*& [_]exists(?dk);
     nonatomic_borrow_mono(k, k1, t, m, nonatomic_borrow_content(l, t, dk));
+    lifetime_inclusion_trans(k1, k, dk);
     close [df]MinimalRefCell_share::<T>(k1, t, l);
 }
 pred_ctor MinimalRefCell_padding<T>(l: *MinimalRefCell<T>)(;) = struct_MinimalRefCell_padding(l);
@@ -175,9 +175,9 @@ impl<T> Drop for MinimalRefCell<T> {
 
 /*@
 pred<'a, T> <MinimalRefMut<'a, T>>.own(t, cell) =
-    exists(?kv) &*&
-    full_borrow(kv, <T>.full_borrow_content(t, &(*cell.refcell).value)) &*&
     [_]exists(?dk) &*&
+    lifetime_inclusion('a, dk) == true &*&
+    full_borrow(dk, <T>.full_borrow_content(t, &(*cell.refcell).value)) &*&
     [_]nonatomic_borrow('a, t, MaskNshrSingle(cell.refcell), nonatomic_borrow_content::<T>(cell.refcell, t, dk));
 @*/
 // Struct to represent a mutable borrow
@@ -216,34 +216,38 @@ impl<'a, T> Drop for MinimalRefMut<'a, T> {
             //@ thread_token_split(_t, MaskTop, mask);
             //@ open_nonatomic_borrow('a, _t, mask, _q_a);
             //@ open nonatomic_borrow_content::<T>(cell, _t, dk)();
-            *self.refcell.mutable_borrowed.get() = false;
-            //@ assert partial_thread_token(_t, ?mask0);
-            /*@
-            produce_lem_ptr_chunk implies(MinimalRefMut_full_borrow_content(_t, self), MinimalRefCell_full_borrow_content(_t, (*self).refcell))() {
-                open MinimalRefMut_full_borrow_content::<'a, T>(_t, self)();
-                open MinimalRefMut_own::<'a, T>(_t, *self);
-                close MinimalRefCell_full_borrow_content::<T>(_t, (*self).refcell)();
-            } {
-                produce_lem_ptr_chunk implies(MinimalRefCell_full_borrow_content(_t, (*self).refcell), MinimalRefMut_full_borrow_content(_t, self))() {
-                    
-                } {
-                    full_borrow_implies(k, MinimalRefMut_full_borrow_content(_t, self), MinimalRefCell_full_borrow_content(_t, (*self).refcell));
-                }
+            /*@ if !(*(*self).refcell).mutable_borrowed {
+                leak full_borrow(dk, _);
             }
             @*/
+            *self.refcell.mutable_borrowed.get() = false;
+            //@ assert partial_thread_token(_t, ?mask0);
             //@ close nonatomic_borrow_content::<T>(cell, _t, dk)();
             //@ close_nonatomic_borrow();
             //@ thread_token_merge(_t, mask0, mask);
             //@ close thread_token(_t);
+            //@ close exists(dk);
+            //@ close MinimalRefCell_share::<T>('a, _t, cell);
+            //@ leak MinimalRefCell_share::<T>('a, _t, cell);
+           
         }
     }
 }
 
 // Allow accessing the value through the mutable reference with a direct dereference
 impl<'a, T> std::ops::DerefMut for MinimalRefMut<'a, T> {
-    fn deref_mut(&mut self) -> &mut T {
+    fn deref_mut<'b>(&'b mut self) -> &'b mut T {
         // Safe because borrow_mut() checks borrowing rules
-        unsafe { &mut *self.refcell.value.get() }
+        unsafe {
+            //@ assert [?qa]lifetime_token('b);
+            //@ let kstrong = open_full_borrow_strong('b, MinimalRefMut_full_borrow_content::<'a, T>(_t, self), qa);
+            //@ open MinimalRefMut_full_borrow_content::<'a, T>(_t, self)();
+            //@ open MinimalRefMut_own::<'a, T>(_t, ?refmut);
+            //@ assert exists(?kv);
+            //@ let kstrong2 = open_full_borrow_strong(kv, <T>.full_borrow_content(_t, &(*refmut.refcell).value), qa);
+            
+            &mut *self.refcell.value.get() 
+        }
     }
 }
 
@@ -256,3 +260,5 @@ impl<'a, T> std::ops::Deref for MinimalRefMut<'a, T> {
         process::abort();
     }
 }
+
+
