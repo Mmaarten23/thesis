@@ -174,9 +174,11 @@ impl<T> Drop for MinimalRefCell<T> {
 }
 
 /*@
+
 pred<'a, T> <MinimalRefMut<'a, T>>.own(t, cell) =
     [_]exists(?dk) &*&
     lifetime_inclusion('a, dk) == true &*&
+    pointer_within_limits(&(*cell.refcell).value) == true &*&
     full_borrow(dk, <T>.full_borrow_content(t, &(*cell.refcell).value)) &*&
     [_]nonatomic_borrow('a, t, MaskNshrSingle(cell.refcell), nonatomic_borrow_content::<T>(cell.refcell, t, dk));
 @*/
@@ -239,14 +241,23 @@ impl<'a, T> std::ops::DerefMut for MinimalRefMut<'a, T> {
     fn deref_mut<'b>(&'b mut self) -> &'b mut T {
         // Safe because borrow_mut() checks borrowing rules
         unsafe {
-            //@ assert [?qa]lifetime_token('b);
-            //@ let kstrong = open_full_borrow_strong('b, MinimalRefMut_full_borrow_content::<'a, T>(_t, self), qa);
+            //@ assert [?qb]lifetime_token('b);
+            //@ open_full_borrow(qb, 'b, MinimalRefMut_full_borrow_content::<'a, T>(_t, self));
             //@ open MinimalRefMut_full_borrow_content::<'a, T>(_t, self)();
-            //@ open MinimalRefMut_own::<'a, T>(_t, ?refmut);
-            //@ assert exists(?kv);
-            //@ let kstrong2 = open_full_borrow_strong(kv, <T>.full_borrow_content(_t, &(*refmut.refcell).value), qa);
-            
-            &mut *self.refcell.value.get() 
+            //@ open MinimalRefMut_own::<'a, T>(_t, *self);
+            //@ assert [_]exists(?dk);
+            //@ lifetime_token_trade('a, _q_a, dk);
+            //@ assert [?qdk]lifetime_token(dk);
+            //@ open_full_borrow(qdk, dk, <T>.full_borrow_content(_t, &(*(*self).refcell).value));
+            //@ open_full_borrow_content::<T>(_t, &(*(*self).refcell).value);
+            let r = &mut *self.refcell.value.get();
+            //@ close_full_borrow_content::<T>(_t, &(*(*self).refcell).value);
+            //@ close_full_borrow(<T>.full_borrow_content(_t, &(*(*self).refcell).value));
+            //@ lifetime_token_trade_back(qdk, dk);
+            //@ close MinimalRefMut_own::<'a, T>(_t, *self);
+            //@ close MinimalRefMut_full_borrow_content::<'a, T>(_t, self)();
+            //@ close_full_borrow(MinimalRefMut_full_borrow_content::<'a, T>(_t, self));
+            r
         }
     }
 }
