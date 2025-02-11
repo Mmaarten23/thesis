@@ -11,6 +11,7 @@ use std::process;
 pub struct RefCell<T> {
     value: UnsafeCell<T>, // The value being stored. Mutable even when the RefCell is immutable.
     mutably_borrowed: UnsafeCell<bool>, // Tracks whether a mutable borrow is active, using UnsafeCell for interior mutability.
+    immutable_borrows: UnsafeCell<usize>, // Tracks the amount of immutable borrows, using UnsafeCell for interior mutability
 }
 
 /*@
@@ -62,8 +63,8 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
 {
     produce_lem_ptr_chunk implies(RefCell_full_borrow_content(t, l), sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed))))() {
         open RefCell_full_borrow_content::<T>(t, l)();
-        assert (*l).value |-> ?value &*& (*l).mutably_borrowed |-> ?mutably_borrowed;
-        open RefCell_own::<T>()(t, RefCell::<T> { value, mutably_borrowed });
+        assert (*l).value |-> ?value &*& (*l).mutably_borrowed |-> ?mutably_borrowed &*& (*l).immutable_borrows |-> ?immutable_borrows;
+        open RefCell_own::<T>()(t, RefCell::<T> { value, mutably_borrowed, immutable_borrows});
 
         close_full_borrow_content::<T>(t, &(*l).value);
         close bool_full_borrow_content(t, &(*l).mutably_borrowed)();
@@ -77,8 +78,8 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
             open sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed))();
             open_full_borrow_content::<T>(t, &(*l).value);
             open bool_full_borrow_content(t, &(*l).mutably_borrowed)();
-            assert (*l).value |-> ?value &*& (*l).mutably_borrowed |-> ?mutably_borrowed;
-            close RefCell_own::<T>(t, RefCell::<T> { value: value, mutably_borrowed: mutably_borrowed });
+            assert (*l).value |-> ?value &*& (*l).mutably_borrowed |-> ?mutably_borrowed &*& (*l).immutable_borrows |-> ?immutable_borrows;
+            close RefCell_own::<T>(t, RefCell::<T> { value: value, mutably_borrowed: mutably_borrowed, immutable_borrows });
             close RefCell_full_borrow_content::<T>(t, l)();
         } {
             full_borrow_implies(k, RefCell_full_borrow_content(t, l), sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed))));
@@ -125,6 +126,7 @@ impl<T> RefCell<T> {
         let r = RefCell {
             value: UnsafeCell::new(value),
             mutably_borrowed: UnsafeCell::new(false),
+            immutable_borrows: UnsafeCell::new(0),
         };
         //@ close RefCell_own::<T>(_t, r);
         r
