@@ -237,26 +237,55 @@ impl<'a, T> Drop for MinimalRefMut<'a, T> {
 }
 
 // Allow accessing the value through the mutable reference with a direct dereference
-impl<'a, T> std::ops::DerefMut for MinimalRefMut<'a, T> {
-    fn deref_mut<'b>(&'b mut self) -> &'b mut T {
+/*@
+pred_ctor RefMut_bc_rest<'a, T>(cell: *MinimalRefMut<'a, T>, refcell: *MinimalRefCell<T>, t: thread_id_t, dk: lifetime_t)() =
+    MinimalRefMut_refcell(cell, refcell) &*&
+    [_]nonatomic_borrow('a, t, MaskNshrSingle(refcell), nonatomic_borrow_content::<T>(refcell, t, dk)) &*&
+    lifetime_inclusion('a, dk) == true;
+@*/
+impl<'b, T> std::ops::DerefMut for MinimalRefMut<'b, T> {
+    fn deref_mut<'a>(&'a mut self) -> &'a mut T {
         // Safe because borrow_mut() checks borrowing rules
         unsafe {
             //@ assert [?qb]lifetime_token('b);
-            //@ open_full_borrow(qb, 'b, MinimalRefMut_full_borrow_content::<'a, T>(_t, self));
-            //@ open MinimalRefMut_full_borrow_content::<'a, T>(_t, self)();
-            //@ open MinimalRefMut_own::<'a, T>(_t, *self);
+            //@ assert [?qa]lifetime_token('a);
+            //@ let kstrong = open_full_borrow_strong('a, MinimalRefMut_full_borrow_content::<'b, T>(_t, self), qa);
+            //@ open MinimalRefMut_full_borrow_content::<'b, T>(_t, self)();
+            //@ open MinimalRefMut_own::<'b, T>(_t, ?mutcell);
+            //@ let refcell = mutcell.refcell;
             //@ assert [_]exists(?dk);
-            //@ lifetime_token_trade('a, _q_a, dk);
+            //@ lifetime_inclusion_trans('a, 'b, dk);
+            //@ lifetime_token_trade('b, _q_b, dk);
             //@ assert [?qdk]lifetime_token(dk);
-            //@ open_full_borrow(qdk, dk, <T>.full_borrow_content(_t, &(*(*self).refcell).value));
-            //@ open_full_borrow_content::<T>(_t, &(*(*self).refcell).value);
-            let r = &mut *self.refcell.value.get();
-            //@ close_full_borrow_content::<T>(_t, &(*(*self).refcell).value);
-            //@ close_full_borrow(<T>.full_borrow_content(_t, &(*(*self).refcell).value));
+            //@ open_full_borrow(qdk, dk, <T>.full_borrow_content(_t, &(*refcell).value));
+            //@ open_full_borrow_content::<T>(_t, &(*refcell).value);
+            //@ close_full_borrow_content::<T>(_t, &(*refcell).value);
+            //@ close_full_borrow(<T>.full_borrow_content(_t, &(*refcell).value));
             //@ lifetime_token_trade_back(qdk, dk);
-            //@ close MinimalRefMut_own::<'a, T>(_t, *self);
-            //@ close MinimalRefMut_full_borrow_content::<'a, T>(_t, self)();
-            //@ close_full_borrow(MinimalRefMut_full_borrow_content::<'a, T>(_t, self));
+            let r = &mut *self.refcell.value.get();
+            /*@
+            produce_lem_ptr_chunk full_borrow_convert_strong(True,
+                sep(RefMut_bc_rest::<'b, T>(self, refcell, _t, dk), full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value))),
+                kstrong,
+                MinimalRefMut_full_borrow_content::<'b, T>(_t, self))() {
+                    open sep(RefMut_bc_rest::<'b, T>(self, refcell, _t, dk), full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value)))();
+                    open RefMut_bc_rest::<'b, T>(self, refcell, _t, dk)();
+                    open full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value))();
+                    close exists(dk); leak exists(dk);
+                    close MinimalRefMut_own::<'b, T>(_t, mutcell);
+                    close MinimalRefMut_full_borrow_content::<'b, T>(_t, self)();
+                }{
+                    close RefMut_bc_rest::<'b, T>(self, refcell, _t, dk)();
+                    close full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value))();
+                    close sep(RefMut_bc_rest::<'b, T>(self, refcell, _t, dk), full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value)))();
+                    close_full_borrow_strong(kstrong, MinimalRefMut_full_borrow_content::<'b, T>(_t, self), sep(RefMut_bc_rest::<'b, T>(self, refcell, _t, dk), full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value))));
+                    full_borrow_split(kstrong, RefMut_bc_rest::<'b, T>(self, refcell, _t, dk), full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value)));
+                    full_borrow_unnest(kstrong, dk, <T>.full_borrow_content(_t, &(*refcell).value));
+                    lifetime_inclusion_glb('a, kstrong, dk);
+                    full_borrow_mono(lifetime_intersection(kstrong, dk), 'a, <T>.full_borrow_content(_t, &(*refcell).value));
+                }
+            @*/
+            //@ leak full_borrow(kstrong, _);
             r
         }
     }
