@@ -1,6 +1,7 @@
 // verifast_options{ignore_ref_creation}
 
 use std::cell::UnsafeCell;
+use std::ops::{Deref, DerefMut};
 use std::process;
 
 /*
@@ -141,7 +142,7 @@ impl<T> RefCell<T> {
             //@ thread_token_split(_t, MaskTop, mask);
             //@ open_nonatomic_borrow('a, _t, mask, _q_a);
             //@ open na_borrow_content::<T>(ref_origin(this), _t, dk)();
-            if *this.mutably_borrowed.get() == false {
+            if *this.mutably_borrowed.get() == false && *this.immutable_borrows.get() == 0 {
                 *this.mutably_borrowed.get() = true;
             } else {
                 process::abort();
@@ -157,6 +158,20 @@ impl<T> RefCell<T> {
         //@ close exists(kv);
         let r = RefMut { refcell: this };
         //@ close RefMut_own::<'a, T>(_t, r);
+        r
+    }
+
+    pub fn borrow<'a>(this: &'a Self) -> Ref<'a, T> {
+        unsafe {
+            let current_borrows = *this.immutable_borrows.get();
+            if let Some(new_borrows) = current_borrows.checked_add(1) {
+                *this.immutable_borrows.get() = new_borrows;
+            } else {
+                process::abort();
+            }
+        }
+        let r = Ref { refcell: this };
+
         r
     }
 }
@@ -245,7 +260,7 @@ pred_ctor RefMut_bc_rest<'a, T>(cell: *RefMut<'a, T>, refcell: *RefCell<T>, t: t
     [_]nonatomic_borrow('a, t, MaskNshrSingle(ref_origin(refcell)), na_borrow_content::<T>(ref_origin(refcell), t, dk)) &*&
     lifetime_inclusion('a, dk) == true;
 @*/
-impl<'b, T> std::ops::DerefMut for RefMut<'b, T> {
+impl<'b, T> DerefMut for RefMut<'b, T> {
     fn deref_mut<'a>(&'a mut self) -> &'a mut T {
         unsafe {
             //@ assert [?qb]lifetime_token('b);
@@ -293,7 +308,7 @@ impl<'b, T> std::ops::DerefMut for RefMut<'b, T> {
 }
 
 // Ignore Deref for now //Todo: implement
-impl<'a, T> std::ops::Deref for RefMut<'a, T> {
+impl<'a, T> Deref for RefMut<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -301,4 +316,25 @@ impl<'a, T> std::ops::Deref for RefMut<'a, T> {
     }
 }
 
+pub struct Ref<'a, T> {
+    refcell: &'a RefCell<T>,
+}
 
+impl<'a, T> Drop for Ref<'a, T> {
+    fn drop(&mut self) {
+        unsafe {
+            *self.refcell.immutable_borrows.get() = *self.refcell.immutable_borrows.get() - 1;
+        }
+    }
+}
+
+impl<'a, T> Deref for Ref<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        unsafe {
+            let r = &*self.refcell.value.get();
+            r
+        }
+    }
+}
