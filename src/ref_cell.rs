@@ -33,9 +33,12 @@ pred<T> <RefCell<T>>.own(t, cell) = <T>.own(t, cell.value);
 
 pred_ctor na_borrow_content<T>(ptr: *RefCell<T>, t: thread_id_t, k: lifetime_t)() =
     RefCell_mutably_borrowed(ptr, ?borrowed) &*&
+    RefCell_immutable_borrows(ptr, ?immutables) &*&
+    pointer_within_limits(&(*ptr).immutable_borrows) == true &*&
     pointer_within_limits(&(*ptr).mutably_borrowed) == true &*&
     pointer_within_limits(&(*ptr).value) == true &*&
-    if borrowed { true }
+    immutables >= 0 &*&
+    if borrowed || immutables != 0 { true }
     else {
         full_borrow(k, <T>.full_borrow_content(t, &(*ptr).value))
     };
@@ -62,32 +65,37 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
     req type_interp::<T>() &*& atomic_mask(MaskTop) &*& full_borrow(k, RefCell_full_borrow_content::<T>(t, l)) &*& [?q]lifetime_token(k) &*& l == ref_origin(l);
     ens type_interp::<T>() &*& atomic_mask(MaskTop) &*& [_]RefCell_share::<T>(k, t, l) &*& [q]lifetime_token(k);
 {
-    produce_lem_ptr_chunk implies(RefCell_full_borrow_content(t, l), sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed))))() {
+    produce_lem_ptr_chunk implies(RefCell_full_borrow_content(t, l), sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)))))() {
         open RefCell_full_borrow_content::<T>(t, l)();
         assert (*l).value |-> ?value &*& (*l).mutably_borrowed |-> ?mutably_borrowed &*& (*l).immutable_borrows |-> ?immutable_borrows;
         open RefCell_own::<T>()(t, RefCell::<T> { value, mutably_borrowed, immutable_borrows});
 
         close_full_borrow_content::<T>(t, &(*l).value);
         close bool_full_borrow_content(t, &(*l).mutably_borrowed)();
-        close sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed))();
+        close usize_full_borrow_content(t, &(*l).immutable_borrows)();
+        close sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows))();
+        close sep(<T>.full_borrow_content(t, &(*l).value), sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)))();
         close RefCell_padding::<T>(l)();
-        close sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed)))();
+        close sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows))))();
     } {
-        produce_lem_ptr_chunk implies(sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed))), RefCell_full_borrow_content(t, l))() {
-            open sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed)))();
+        produce_lem_ptr_chunk implies(sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)))), RefCell_full_borrow_content(t, l))() {
+            open sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows))))();
             open RefCell_padding::<T>(l)();
-            open sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed))();
+            open sep(<T>.full_borrow_content(t, &(*l).value), sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)))();
+            open sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows))();
             open_full_borrow_content::<T>(t, &(*l).value);
             open bool_full_borrow_content(t, &(*l).mutably_borrowed)();
+            open usize_full_borrow_content(t, &(*l).immutable_borrows)();
             assert (*l).value |-> ?value &*& (*l).mutably_borrowed |-> ?mutably_borrowed &*& (*l).immutable_borrows |-> ?immutable_borrows;
             close RefCell_own::<T>(t, RefCell::<T> { value: value, mutably_borrowed: mutably_borrowed, immutable_borrows });
             close RefCell_full_borrow_content::<T>(t, l)();
         } {
-            full_borrow_implies(k, RefCell_full_borrow_content(t, l), sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed))));
+            full_borrow_implies(k, RefCell_full_borrow_content(t, l), sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)))));
         }
     }
-    full_borrow_split_m(k, RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed)));
-    full_borrow_split_m(k, <T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed)); // LFTL-BOR-SPLIT
+    full_borrow_split_m(k, RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows))));
+    full_borrow_split_m(k, <T>.full_borrow_content(t, &(*l).value), sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows))); // LFTL-BOR-SPLIT
+    
     open_full_borrow_m(q, k, <T>.full_borrow_content(t, &(*l).value));
     open_full_borrow_content(t, &(*l).value);
     points_to_limits(&(*l).value);
@@ -95,23 +103,28 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
     close_full_borrow_m(<T>.full_borrow_content(t, &(*l).value));
 
 
-    let kstrong = open_full_borrow_strong_m(k, bool_full_borrow_content(t, &(*l).mutably_borrowed), q); // LFTL-BOR-ACC-STRONG
-    produce_lem_ptr_chunk full_borrow_convert_strong(True, na_borrow_content(l, t, k), kstrong, bool_full_borrow_content(t, &(*l).mutably_borrowed))() {
+    let kstrong = open_full_borrow_strong_m(k, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)), q); // LFTL-BOR-ACC-STRONG
+    produce_lem_ptr_chunk full_borrow_convert_strong(True, na_borrow_content(l, t, k), kstrong, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)))() {
         open na_borrow_content::<T>(l, t, k)();
-        if (*l).mutably_borrowed == false {
+        if (*l).mutably_borrowed == false && (*l).immutable_borrows == 0 {
             leak full_borrow(_, <T>.full_borrow_content(t, &(*l).value));
         }
         close bool_full_borrow_content(t, &(*l).mutably_borrowed)();
+        close usize_full_borrow_content(t, &(*l).immutable_borrows)();
+        close sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows))();
     }{
+        open sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows))();
         open bool_full_borrow_content(t, &(*l).mutably_borrowed)();
+        open usize_full_borrow_content(t, &(*l).immutable_borrows)();
         close exists(k);
 
-        if (*l).mutably_borrowed == true {
+        if (*l).mutably_borrowed == true || (*l).immutable_borrows != 0 {
             leak full_borrow(_, <T>.full_borrow_content(t, &(*l).value));
         }
         points_to_limits(&(*l).mutably_borrowed);
+        points_to_limits(&(*l).immutable_borrows);
         close na_borrow_content::<T>(l, t, k)();
-        close_full_borrow_strong_m(kstrong, bool_full_borrow_content(t, &(*l).mutably_borrowed), na_borrow_content(l, t, k));
+        close_full_borrow_strong_m(kstrong, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)), na_borrow_content(l, t, k));
         full_borrow_into_nonatomic_borrow_m(kstrong, t, MaskNshrSingle(l), na_borrow_content(l, t, k));
         nonatomic_borrow_mono(kstrong, k, t, MaskNshrSingle(l), na_borrow_content(l, t, k));
         close exists(k);
@@ -162,7 +175,14 @@ impl<T> RefCell<T> {
     }
 
     pub fn borrow<'a>(this: &'a Self) -> Ref<'a, T> {
+        //@ open RefCell_share::<T>()('a, _t, this);
         unsafe {
+            //@ assert [_]exists::<lifetime_t>(?dk);
+            //@ assert [_]nonatomic_borrow('a, _t, ?mask, na_borrow_content(this, _t, dk));
+            //@ open thread_token(_t);
+            //@ thread_token_split(_t, MaskTop, mask);
+            //@ open_nonatomic_borrow('a, _t, mask, _q_a);
+            //@ open na_borrow_content::<T>(this, _t, dk)();
             let current_borrows = *this.immutable_borrows.get();
             if let Some(new_borrows) = current_borrows.checked_add(1) {
                 *this.immutable_borrows.get() = new_borrows;
@@ -249,7 +269,6 @@ impl<'a, T> Drop for RefMut<'a, T> {
             //@ close exists(dk);
             //@ close RefCell_share::<T>('a, _t, cell);
             //@ leak RefCell_share::<T>('a, _t, cell);
-           
         }
     }
 }
