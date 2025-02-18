@@ -42,14 +42,14 @@ pred_ctor na_borrow_content<T>(ptr: *RefCell<T>, t: thread_id_t, k: lifetime_t)(
     pointer_within_limits(&(*ptr).mutably_borrowed) == true &*&
     pointer_within_limits(&(*ptr).value) == true &*&
     immutables >= 0 &*&
-    if !borrowed { full_borrow(k, <T>.full_borrow_content(t, &(*ptr).value)) }
-    else {
+    if !borrowed {
         if immutables != 0 {
-            [_]exists(?dlft) &*& [_]exists(?gid) &*&
-            <T>.share(dlft, t, &(*ptr).value)
+            [_](<T>.share)(k, t, &(*ptr).value)
         } else {
-            true
+            full_borrow(k, <T>.full_borrow_content(t, &(*ptr).value))
         }
+    } else {
+        true
     };
 
 pred<T> <RefCell<T>>.share(k, t, l) =
@@ -115,11 +115,11 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
     let kstrong = open_full_borrow_strong_m(k, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)), q); // LFTL-BOR-ACC-STRONG
     produce_lem_ptr_chunk full_borrow_convert_strong(True, na_borrow_content(l, t, k), kstrong, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)))() {
         open na_borrow_content::<T>(l, t, k)();
-        if (*l).mutably_borrowed == false {
+        if (*l).mutably_borrowed == false && (*l).immutable_borrows == 0{
             leak full_borrow(_, <T>.full_borrow_content(t, &(*l).value));
         } else {
-            if (*l).immutable_borrows != 0 {
-                leak <T>.share(_, _, _);
+            if (*l).mutably_borrowed == false && (*l).immutable_borrows != 0 {
+                leak [_](<T>.share)(_, _, _);
             }
         }
         close bool_full_borrow_content(t, &(*l).mutably_borrowed)();
