@@ -14,8 +14,6 @@ pub struct RefCell<T> {
 }
 
 /*@
-pred True(;) = true;
-
 lem init_ref_RefCell<T>(p: *RefCell<T>)
     req type_interp::<T>() &*& atomic_mask(Nlft) &*& ref_init_perm(p, ?x) &*& [_]RefCell_share::<T>(?k, ?t, x) &*& [?q]lifetime_token(k);
     ens type_interp::<T>() &*& atomic_mask(Nlft) &*& [q]lifetime_token(k) &*& [_]RefCell_share::<T>(k, t, p) &*& [_]frac_borrow(k, ref_initialized_(p));
@@ -59,8 +57,8 @@ lem RefCell_share_mono<T>(k: lifetime_t, k1: lifetime_t, t: thread_id_t, l: *Ref
 pred_ctor RefCell_padding<T>(l: *RefCell<T>)(;) = struct_RefCell_padding(l);
 
 lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
-    req type_interp::<T>() &*& atomic_mask(Nlft) &*& full_borrow(k, RefCell_full_borrow_content::<T>(t, l)) &*& [?q]lifetime_token(k);
-    ens type_interp::<T>() &*& atomic_mask(Nlft) &*& [_]RefCell_share::<T>(k, t, l) &*& [q]lifetime_token(k);
+    req type_interp::<T>() &*& atomic_mask(MaskTop) &*& full_borrow(k, RefCell_full_borrow_content::<T>(t, l)) &*& [?q]lifetime_token(k);
+    ens type_interp::<T>() &*& atomic_mask(MaskTop) &*& [_]RefCell_share::<T>(k, t, l) &*& [q]lifetime_token(k);
 {
     produce_lem_ptr_chunk implies(RefCell_full_borrow_content(t, l), sep(RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), bool_full_borrow_content(t, &(*l).mutably_borrowed))))() {
         open RefCell_full_borrow_content::<T>(t, l)();
