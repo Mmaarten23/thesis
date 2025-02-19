@@ -112,7 +112,7 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
     close_full_borrow_m(<T>.full_borrow_content(t, &(*l).value));
 
 
-    let kstrong = open_full_borrow_strong_m(k, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)), q); // LFTL-BOR-ACC-STRONG
+    let kstrong = open_full_borrow_strong_m(k, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)), q/2); // LFTL-BOR-ACC-STRONG
     produce_lem_ptr_chunk full_borrow_convert_strong(True, na_borrow_content(l, t, k), kstrong, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)))() {
         open na_borrow_content::<T>(l, t, k)();
         if (*l).mutably_borrowed == false && (*l).immutable_borrows == 0{
@@ -135,7 +135,7 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
             leak full_borrow(_, <T>.full_borrow_content(t, &(*l).value));
         } else {
             if (*l).immutable_borrows != 0 {
-                // share_full_borrow_m::<T>(k, t, &(*l).value);
+                share_full_borrow_m::<T>(k, t, &(*l).value);
             }
         }
         points_to_limits(&(*l).mutably_borrowed);
