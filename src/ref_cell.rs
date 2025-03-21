@@ -16,8 +16,10 @@ pub struct RefCell<T> {
 }
 
 /*@
+pred hidden_lifetime_token(k: lifetime_t;) = lifetime_token(k);
+fix dlft0() -> lifetime_t { default_value }
 
-pred_ctor dlft_pred(dlft: lifetime_t)(gid: usize; destroyed: bool) = ghost_cell(gid, destroyed) &*& if destroyed { true } else { lifetime_token(dlft) };
+pred dlft_pred(gid: usize; value: pair<lifetime_t, bool>) = ghost_cell(gid, value) &*& if snd(value) || fst(value) == dlft0() { true } else { lifetime_token(fst(value)) };
 
 
 lem init_ref_RefCell<T>(p: *RefCell<T>)
@@ -35,27 +37,32 @@ lem RefCell_send<T>(t1: thread_id_t)
 }
 pred<T> <RefCell<T>>.own(t, cell) = <T>.own(t, cell.value);
 
-pred_ctor na_borrow_content<T>(ptr: *RefCell<T>, t: thread_id_t, k: lifetime_t)() =
+pred_ctor na_borrow_content<T>(ptr: *RefCell<T>, t: thread_id_t, klong: lifetime_t, gid: i32)() =
     RefCell_mutably_borrowed(ptr, ?borrowed) &*&
     RefCell_immutable_borrows(ptr, ?immutables) &*&
     pointer_within_limits(&(*ptr).immutable_borrows) == true &*&
     pointer_within_limits(&(*ptr).mutably_borrowed) == true &*&
     pointer_within_limits(&(*ptr).value) == true &*&
     immutables >= 0 &*&
+    immutables <= usize::MAX &*&
+    counting(dlft_pred, gid, immutables, ?value) &*&
+    value == pair(?dlft, ?destroyed) &*&
     if !borrowed {
-        if immutables != 0 {
-            [_](<T>.share)(k, t, &(*ptr).value)
+        if immutables > 0 {
+            lifetime_inclusion(dlft, klong) == true &*&
+            [_](<T>.share)(dlft, t, &(*ptr).value)
         } else {
-            full_borrow(k, <T>.full_borrow_content(t, &(*ptr).value))
+            full_borrow(klong, <T>.full_borrow_content(t, &(*ptr).value))
         }
     } else {
-        true
+        immutables == 0
     };
 
 pred<T> <RefCell<T>>.share(k, t, l) =
-    exists(?dk) &*&
-    lifetime_inclusion(k, dk) == true &*&
-    [_]nonatomic_borrow(k, t, MaskNshrSingle(ref_origin(l)), na_borrow_content(ref_origin(l), t, dk));
+    exists(?klong) &*&
+    exists(?gid) &*&
+    lifetime_inclusion(k, klong) == true &*&
+    [_]nonatomic_borrow(k, t, MaskNshrSingle(ref_origin(l)), na_borrow_content(ref_origin(l), t, klong, gid));
 
 
 lem RefCell_share_mono<T>(k: lifetime_t, k1: lifetime_t, t: thread_id_t, l: *RefCell<T>)
@@ -63,9 +70,9 @@ lem RefCell_share_mono<T>(k: lifetime_t, k1: lifetime_t, t: thread_id_t, l: *Ref
     ens type_interp::<T>() &*& [_]RefCell_share::<T>(k1, t, l);
 {
     open [?df]RefCell_share::<T>(k, t, l);
-    assert [_]nonatomic_borrow(k, t, ?m, _) &*& [_]exists(?dk);
-    nonatomic_borrow_mono(k, k1, t, m, na_borrow_content(ref_origin(l), t, dk));
-    lifetime_inclusion_trans(k1, k, dk);
+    assert [_]nonatomic_borrow(k, t, ?m, _) &*& [_]exists::<lifetime_t>(?klong) &*& [_]exists::<i32>(?gid);
+    nonatomic_borrow_mono(k, k1, t, m, na_borrow_content(ref_origin(l), t, klong, gid));
+    lifetime_inclusion_trans(k1, k, klong);
     close [df]RefCell_share::<T>(k1, t, l);
 }
 pred_ctor RefCell_padding<T>(l: *RefCell<T>)(;) = struct_RefCell_padding(l);
@@ -104,17 +111,20 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
     }
     full_borrow_split_m(k, RefCell_padding(l), sep(<T>.full_borrow_content(t, &(*l).value), sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows))));
     full_borrow_split_m(k, <T>.full_borrow_content(t, &(*l).value), sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows))); // LFTL-BOR-SPLIT
-    
+
     open_full_borrow_m(q, k, <T>.full_borrow_content(t, &(*l).value));
     open_full_borrow_content(t, &(*l).value);
     points_to_limits(&(*l).value);
     close_full_borrow_content(t, &(*l).value);
     close_full_borrow_m(<T>.full_borrow_content(t, &(*l).value));
+    let gid = create_ghost_cell::<pair<lifetime_t, bool>>(pair(dlft0, false));
+    close exists(gid);
 
 
     let kstrong = open_full_borrow_strong_m(k, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)), q/2); // LFTL-BOR-ACC-STRONG
-    produce_lem_ptr_chunk full_borrow_convert_strong(True, na_borrow_content(l, t, k), kstrong, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)))() {
-        open na_borrow_content::<T>(l, t, k)();
+    produce_lem_ptr_chunk full_borrow_convert_strong(True, na_borrow_content(l, t, k, gid), kstrong, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)))() {
+        open na_borrow_content::<T>(l, t, k, gid)();
+        leak counting(_, _, _, _);
         if (*l).mutably_borrowed == false && (*l).immutable_borrows == 0{
             leak full_borrow(_, <T>.full_borrow_content(t, &(*l).value));
         } else {
@@ -130,20 +140,53 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
         open bool_full_borrow_content(t, &(*l).mutably_borrowed)();
         open usize_full_borrow_content(t, &(*l).immutable_borrows)();
         close exists(k);
+        assert RefCell_mutably_borrowed(l, ?borrowed);
+        assert RefCell_immutable_borrows(l, ?immutables);
 
-        if (*l).mutably_borrowed == true && (*l).immutable_borrows == 0 {
+        if borrowed == true && immutables == 0 {
             leak full_borrow(_, <T>.full_borrow_content(t, &(*l).value));
-        } else {
-            if (*l).immutable_borrows != 0 {
-                share_full_borrow_m::<T>(k, t, &(*l).value);
+            start_counting(dlft_pred, gid);
+        }
+        else if borrowed == false && immutables > 0 {
+            let newlft = begin_lifetime_m();
+            let dlft = lifetime_intersection(k, newlft);
+            reborrow_m(dlft, k, <T>.full_borrow_content(t, &(*l).value));
+            assert [?qk]lifetime_token(k);
+            lifetime_token_inv(k);
+            if qk < 1 { }
+            close_lifetime_intersection_token(qk, k, newlft);
+            ghost_cell_mutate(gid, pair(dlft, true));
+            start_counting(dlft_pred, gid);
+            let i = 0;
+            while i < immutables
+                inv i <= immutables &*& counting(dlft_pred, gid, i, pair(dlft, true));
+                decreases immutables - i;
+            {
+                create_ticket(dlft_pred, gid);
+                leak ticket(_, _, _);
+                leak [_]dlft_pred(_, _);
+                i = i + 1;
             }
+            share_full_borrow_m::<T>(dlft, t, &(*l).value);
+            open_lifetime_intersection_token(qk, k, newlft);
+            end_lifetime_m(newlft);
+            lifetime_intersection_symm(k, newlft);
+            close_lifetime_intersection_dead_token(newlft, k);
+            end_reborrow_m(dlft, k, <T>.full_borrow_content(t, &(*l).value));
+            leak full_borrow(_, <T>.full_borrow_content(t, &(*l).value));
+        } 
+        else if borrowed == false && immutables == 0{
+            start_counting(dlft_pred, gid);
+        } 
+        else {
+            assume(false);
         }
         points_to_limits(&(*l).mutably_borrowed);
         points_to_limits(&(*l).immutable_borrows);
-        close na_borrow_content::<T>(l, t, k)();
-        close_full_borrow_strong_m(kstrong, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)), na_borrow_content(l, t, k));
-        full_borrow_into_nonatomic_borrow_m(kstrong, t, MaskNshrSingle(l), na_borrow_content(l, t, k));
-        nonatomic_borrow_mono(kstrong, k, t, MaskNshrSingle(l), na_borrow_content(l, t, k));
+        close na_borrow_content::<T>(l, t, k, gid)();
+        close_full_borrow_strong_m(kstrong, sep(bool_full_borrow_content(t, &(*l).mutably_borrowed), usize_full_borrow_content(t, &(*l).immutable_borrows)), na_borrow_content(l, t, k, gid));
+        full_borrow_into_nonatomic_borrow_m(kstrong, t, MaskNshrSingle(l), na_borrow_content(l, t, k, gid));
+        nonatomic_borrow_mono(kstrong, k, t, MaskNshrSingle(l), na_borrow_content(l, t, k, gid));
         close exists(k);
         close RefCell_share::<T>(k, t, l);
         leak RefCell_share::<T>(k, t, l);
@@ -160,12 +203,6 @@ impl<T> RefCell<T> {
             immutable_borrows: UnsafeCell::new(0),
         };
         //@ close RefCell_own::<T>(_t, r);
-        //@ let dlft = begin_lifetime();
-        //@ let gid = create_ghost_cell(false); //destroyed
-        //@ leak exists::<usize>(gid);
-        //@ close dlft_pred(dlft)(gid, false);
-        //@ start_counting(dlft_pred(dlft), gid);
-        //@ let frac = create_ticket(dlft_pred(dlft), gid);
         r
     }
 
@@ -173,12 +210,13 @@ impl<T> RefCell<T> {
         //@ open RefCell_share::<T>()('a, _t, this);
         unsafe {
             //@ assert [_]exists::<lifetime_t>(?dk);
-            //@ assert [_]nonatomic_borrow('a, _t, ?mask, na_borrow_content(ref_origin(this), _t, dk));
+            //@ assert [_]exists::<i32>(?gid);
+            //@ assert [_]nonatomic_borrow('a, _t, ?mask, na_borrow_content(ref_origin(this), _t, dk, gid));
             //@ open thread_token(_t);
             //@ thread_token_split(_t, MaskTop, mask);
             //@ open_nonatomic_borrow('a, _t, mask, _q_a);
-            //@ open na_borrow_content::<T>(ref_origin(this), _t, dk)();
-            //@ open RefCell_mutably_borrowed::<T>(this, _);
+            //@ open na_borrow_content::<T>(ref_origin(this), _t, dk, gid)();
+            //@ open RefCell_mutably_borrowed::<T>(ref_origin(this), _);
             if *this.mutably_borrowed.get() == false && *this.immutable_borrows.get() == 0 {
                 *this.mutably_borrowed.get() = true;
             } else {
@@ -186,7 +224,8 @@ impl<T> RefCell<T> {
             }
         }
         //@ assert partial_thread_token(_t, ?mask0);
-        //@ close na_borrow_content::<T>(ref_origin(this), _t, dk)();
+        //@ close exists(gid);
+        //@ close na_borrow_content::<T>(ref_origin(this), _t, dk, gid)();
         //@ close_nonatomic_borrow();
         //@ thread_token_merge(_t, mask0, mask);
         //@ close thread_token(_t);
@@ -200,22 +239,66 @@ impl<T> RefCell<T> {
 
     pub fn borrow<'a>(this: &'a Self) -> Ref<'a, T> {
         //@ open RefCell_share::<T>()('a, _t, this);
+        //@ assert [?qa]lifetime_token('a);
         unsafe {
-            //@ assert [_]exists::<lifetime_t>(?dk);
-            //@ assert [_]nonatomic_borrow('a, _t, ?mask, na_borrow_content(this, _t, dk));
+            //@ assert [_]exists::<lifetime_t>(?klong);
+            //@ assert [_]exists::<i32>(?gid);
+            //@ assert [_]nonatomic_borrow('a, _t, ?mask, na_borrow_content(ref_origin(this), _t, klong, gid));
             //@ open thread_token(_t);
             //@ thread_token_split(_t, MaskTop, mask);
-            //@ open_nonatomic_borrow('a, _t, mask, _q_a);
-            //@ open na_borrow_content::<T>(this, _t, dk)();
+            //@ open_nonatomic_borrow('a, _t, mask, _q_a / 2);
+            //@ open na_borrow_content::<T>(ref_origin(this), _t, klong, gid)();
+            //@ assert RefCell_immutable_borrows::<T>(ref_origin(this), ?immutables);
+
             let current_borrows = *this.immutable_borrows.get();
             if let Some(new_borrows) = current_borrows.checked_add(1) {
                 *this.immutable_borrows.get() = new_borrows;
             } else {
                 process::abort();
             }
-        }
-        let r = Ref { refcell: this };
+            //@ assert partial_thread_token(_t, ?mask0);
+            //@ close exists::<i32>(gid);
+            /*@ if immutables == 0
+                {
+                    let newlft = begin_lifetime();
+                    let dlft = lifetime_intersection(klong, newlft);
+                    reborrow(dlft, klong, <T>.full_borrow_content(_t, &(*ref_origin(this)).value));
+                    assert [?qa2]lifetime_token('a);
+                    lifetime_token_trade('a, qa2, klong);
+                    assert [?q1]lifetime_token(klong);
+                    lifetime_token_inv(klong);
+                    if q1 < 1 { }
+                    close_lifetime_intersection_token(q1, klong, newlft);
 
+                    stop_counting(dlft_pred, gid);
+                    ghost_cell_mutate(gid, pair(dlft, false));
+                    start_counting(dlft_pred, gid);
+                    let frac = create_ticket(dlft_pred, gid);
+                    open [frac]dlft_pred(gid, pair(?old_dlft, ?destroyed));
+
+
+                    share_full_borrow::<T>(dlft, _t, &(*ref_origin(this)).value);
+                    open_lifetime_intersection_token(q1, klong, newlft);
+                    lifetime_token_trade_back(q1, klong);
+                    leak end_reborrow_token(_,_,_);
+                    leak exists(gid);
+                    leak exists(dlft);
+                    leak lifetime_token(newlft);
+
+                } else {
+                    let frac = create_ticket(dlft_pred, gid);
+                }
+            @*/
+            //@ close na_borrow_content::<T>(ref_origin(this), _t, klong, gid)();
+            //@ close_nonatomic_borrow();
+            //@ thread_token_merge(_t, mask0, mask);
+            //@ close thread_token(_t);
+        }
+        //@ assert [_](<T>.share)(?dlft, _t, &(*ref_origin(this)).value);
+        //@ close exists(dlft);
+        let r = Ref { refcell: this };
+        //@ leak exists(klong);
+        //@ close Ref_own::<'a, T>(_t, r);
         r
     }
 }
@@ -228,7 +311,7 @@ impl<T> Drop for RefCell<T> {
         //@ open RefCell_full_borrow_content::<T>(_t, self)();
         //@ open RefCell_own::<T>(_t, ?s);
         unsafe {
-            if *self.mutably_borrowed.get() {
+            if *self.mutably_borrowed.get() || *self.immutable_borrows.get() != 0 {
                 process::abort();
             }
         }
@@ -238,11 +321,12 @@ impl<T> Drop for RefCell<T> {
 /*@
 
 pred<'a, T> <RefMut<'a, T>>.own(t, cell) =
-    [_]exists(?dk) &*&
-    lifetime_inclusion('a, dk) == true &*&
+    [_]exists(?klong) &*&
+    exists(?gid) &*&
+    lifetime_inclusion('a, klong) == true &*&
     pointer_within_limits(&(*cell.refcell).value) == true &*&
-    full_borrow(dk, <T>.full_borrow_content(t, &(*ref_origin(cell.refcell)).value)) &*&
-    [_]nonatomic_borrow('a, t, MaskNshrSingle(ref_origin(cell.refcell)), na_borrow_content::<T>(ref_origin(cell.refcell), t, dk));
+    full_borrow(klong, <T>.full_borrow_content(t, &(*ref_origin(cell.refcell)).value)) &*&
+    [_]nonatomic_borrow('a, t, MaskNshrSingle(ref_origin(cell.refcell)), na_borrow_content::<T>(ref_origin(cell.refcell), t, klong, gid));
 @*/
 // Struct to represent a mutable borrow
 pub struct RefMut<'a, T> {
@@ -273,24 +357,26 @@ impl<'a, T> Drop for RefMut<'a, T> {
         //@ open RefMut_full_borrow_content::<'a, T>(_t, self)();
         //@ open RefMut_own::<'a, T>(_t, ?s);
         unsafe {
-            //@ assert [_]exists::<lifetime_t>(?dk);
+            //@ assert [_]exists::<lifetime_t>(?klong);
+            //@ assert [_]exists::<i32>(?gid);
             //@ assert RefMut_refcell::<'a, T>(self, ?cell);
-            //@ assert [_]nonatomic_borrow('a, _t, ?mask, na_borrow_content(ref_origin(cell), _t, dk));
+            //@ assert [_]nonatomic_borrow('a, _t, ?mask, na_borrow_content(ref_origin(cell), _t, klong, gid));
             //@ open thread_token(_t);
             //@ thread_token_split(_t, MaskTop, mask);
             //@ open_nonatomic_borrow('a, _t, mask, _q_a);
-            //@ open na_borrow_content::<T>(ref_origin(cell), _t, dk)();
+            //@ open na_borrow_content::<T>(ref_origin(cell), _t, klong, gid)();
             /*@ if !(*ref_origin((*self).refcell)).mutably_borrowed {
-                leak full_borrow(dk, _);
+                leak full_borrow(klong, _);
             }
             @*/
             *self.refcell.mutably_borrowed.get() = false;
+
             //@ assert partial_thread_token(_t, ?mask0);
-            //@ close na_borrow_content::<T>(ref_origin(cell), _t, dk)();
+            //@ close na_borrow_content::<T>(ref_origin(cell), _t, klong, gid)();
             //@ close_nonatomic_borrow();
             //@ thread_token_merge(_t, mask0, mask);
             //@ close thread_token(_t);
-            //@ close exists(dk);
+            //@ close exists(klong);
             //@ close RefCell_share::<T>('a, _t, cell);
             //@ leak RefCell_share::<T>('a, _t, cell);
         }
@@ -298,9 +384,9 @@ impl<'a, T> Drop for RefMut<'a, T> {
 }
 
 /*@
-pred_ctor RefMut_bc_rest<'a, T>(cell: *RefMut<'a, T>, refcell: *RefCell<T>, t: thread_id_t, dk: lifetime_t)() =
+pred_ctor RefMut_bc_rest<'a, T>(cell: *RefMut<'a, T>, refcell: *RefCell<T>, t: thread_id_t, dk: lifetime_t, gid: usize)() =
     RefMut_refcell(cell, refcell) &*&
-    [_]nonatomic_borrow('a, t, MaskNshrSingle(ref_origin(refcell)), na_borrow_content::<T>(ref_origin(refcell), t, dk)) &*&
+    [_]nonatomic_borrow('a, t, MaskNshrSingle(ref_origin(refcell)), na_borrow_content::<T>(ref_origin(refcell), t, dk, gid)) &*&
     lifetime_inclusion('a, dk) == true;
 @*/
 impl<'b, T> DerefMut for RefMut<'b, T> {
@@ -312,36 +398,38 @@ impl<'b, T> DerefMut for RefMut<'b, T> {
             //@ open RefMut_full_borrow_content::<'b, T>(_t, self)();
             //@ open RefMut_own::<'b, T>(_t, ?mutcell);
             //@ let refcell = ref_origin(mutcell.refcell);
-            //@ assert [_]exists(?dk);
-            //@ lifetime_inclusion_trans('a, 'b, dk);
-            //@ lifetime_token_trade('b, _q_b, dk);
-            //@ assert [?qdk]lifetime_token(dk);
-            //@ open_full_borrow(qdk, dk, <T>.full_borrow_content(_t, &(*refcell).value));
+            //@ assert [_]exists::<lifetime_t>(?k);
+            //@ lifetime_inclusion_trans('a, 'b, k);
+            //@ lifetime_token_trade('b, _q_b, k);
+            //@ assert [?qk]lifetime_token(k);
+            //@ open_full_borrow(qk, k, <T>.full_borrow_content(_t, &(*refcell).value));
             //@ open_full_borrow_content::<T>(_t, &(*refcell).value);
             //@ close_full_borrow_content::<T>(_t, &(*refcell).value);
             //@ close_full_borrow(<T>.full_borrow_content(_t, &(*refcell).value));
-            //@ lifetime_token_trade_back(qdk, dk);
+            //@ lifetime_token_trade_back(qk, k);
             let r = &mut *self.refcell.value.get();
+            //@ assert exists::<i32>(?gid);
             /*@
             produce_lem_ptr_chunk full_borrow_convert_strong(True,
-                sep(RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, dk), full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value))),
+                sep(RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, k, gid), full_borrow_(k, <T>.full_borrow_content(_t, &(*refcell).value))),
                 kstrong,
                 RefMut_full_borrow_content::<'b, T>(_t, self))() {
-                    open sep(RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, dk), full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value)))();
-                    open RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, dk)();
-                    open full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value))();
-                    close exists(dk); leak exists(dk);
+                    open sep(RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, k, gid), full_borrow_(k, <T>.full_borrow_content(_t, &(*refcell).value)))();
+                    open RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, k, gid)();
+                    open full_borrow_(k, <T>.full_borrow_content(_t, &(*refcell).value))();
+                    close exists(k); leak exists(k);
+                    close exists(gid);
                     close RefMut_own::<'b, T>(_t, mutcell);
                     close RefMut_full_borrow_content::<'b, T>(_t, self)();
                 }{
-                    close RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, dk)();
-                    close full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value))();
-                    close sep(RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, dk), full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value)))();
-                    close_full_borrow_strong(kstrong, RefMut_full_borrow_content::<'b, T>(_t, self), sep(RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, dk), full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value))));
-                    full_borrow_split(kstrong, RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, dk), full_borrow_(dk, <T>.full_borrow_content(_t, &(*refcell).value)));
-                    full_borrow_unnest(kstrong, dk, <T>.full_borrow_content(_t, &(*refcell).value));
-                    lifetime_inclusion_glb('a, kstrong, dk);
-                    full_borrow_mono(lifetime_intersection(kstrong, dk), 'a, <T>.full_borrow_content(_t, &(*refcell).value));
+                    close RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, k, gid)();
+                    close full_borrow_(k, <T>.full_borrow_content(_t, &(*refcell).value))();
+                    close sep(RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, k, gid), full_borrow_(k, <T>.full_borrow_content(_t, &(*refcell).value)))();
+                    close_full_borrow_strong(kstrong, RefMut_full_borrow_content::<'b, T>(_t, self), sep(RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, k, gid), full_borrow_(k, <T>.full_borrow_content(_t, &(*refcell).value))));
+                    full_borrow_split(kstrong, RefMut_bc_rest::<'b, T>(self, mutcell.refcell, _t, k, gid), full_borrow_(k, <T>.full_borrow_content(_t, &(*refcell).value)));
+                    full_borrow_unnest(kstrong, k, <T>.full_borrow_content(_t, &(*refcell).value));
+                    lifetime_inclusion_glb('a, kstrong, k);
+                    full_borrow_mono(lifetime_intersection(kstrong, k), 'a, <T>.full_borrow_content(_t, &(*refcell).value));
                 }
             @*/
             //@ leak full_borrow(kstrong, _);
@@ -359,14 +447,105 @@ impl<'a, T> Deref for RefMut<'a, T> {
     }
 }
 
+/*@
+
+pred<'a, T> <Ref<'a, T>>.own(t, cell) =
+    [_]exists(?k) &*&
+    lifetime_inclusion('a, k) == true &*&
+    pointer_within_limits(&(*cell.refcell).value) == true &*&
+    [_]exists::<i32>(?gid) &*&
+    ticket(dlft_pred, gid, ?frac) &*&
+    [frac]dlft_pred(gid, pair(?dlft, ?destroyed)) &*&
+    [_](<T>.share)(dlft, t, &(*ref_origin(cell.refcell)).value) &*&
+    [_]nonatomic_borrow('a, t, MaskNshrSingle(ref_origin(cell.refcell)), na_borrow_content::<T>(ref_origin(cell.refcell), t, k, gid));
+
+/*pred<'a, T> <Ref<'a, T>>.share(k, t, cell) =
+    [_](<T>.share)(?dlft, t, &(*ref_origin((*cell).refcell)).value);
+
+lem Ref_share_full<'a, T>(k: lifetime_t, t: thread_id_t, l: *Ref<'a, T>)
+    req type_interp::<T>() &*& atomic_mask(MaskTop) &*& full_borrow(k, Ref_full_borrow_content::<'a, T>(t, l)) &*& [?q]lifetime_token(k) &*& l == ref_origin(l);
+    ens type_interp::<T>() &*& atomic_mask(MaskTop) &*& [_]Ref_share::<'a, T>(k, t, l) &*& [q]lifetime_token(k);
+{
+    open_full_borrow_m(q, k, Ref_full_borrow_content(t, l));
+    open Ref_full_borrow_content::<'a, T>(t, l)();
+}*/
+
+@*/
 pub struct Ref<'a, T> {
     refcell: &'a RefCell<T>,
 }
 
+/*@
+
+lem Ref_share_mono<'a, T>(k: lifetime_t, k1: lifetime_t, t: thread_id_t, l: *_)
+    req type_interp::<T>() &*& lifetime_inclusion(k1, k) == true &*& [_]Ref_share::<'a, T>(k, t, l);
+    ens type_interp::<T>() &*& [_]Ref_share::<'a, T>(k1, t, l);
+{
+    assume(false);
+}
+
+lem init_ref_Ref<'a, T>(p: *Ref<'a, T>)
+    req type_interp::<T>() &*& atomic_mask(Nlft) &*& ref_init_perm(p, ?x) &*& [_]Ref_share::<'a, T>(?k, ?t, x) &*& [?q]lifetime_token(k);
+    ens type_interp::<T>() &*& atomic_mask(Nlft) &*& [q]lifetime_token(k) &*& [_]Ref_share::<'a, T>(k, t, p) &*& [_]frac_borrow(k, ref_initialized_(p));
+{
+    assume(false);
+}
+
+lem Ref_sync<'a, T>(t1: thread_id_t)
+    req type_interp::<T>() &*& [_]Ref_share::<'a, T>(?k, ?t0, ?l);
+    ens type_interp::<T>() &*& [_]Ref_share::<'a, T>(k, t1, l);
+{
+    assume(false);
+}
+
+@*/
+
+/*@
+
+lem Ref_own_mono<'a0, 'a1, T>()
+    req type_interp::<T>() &*& Ref_own::<'a0, T>(?t, ?v) &*& lifetime_inclusion('a1, 'a0) == true;
+    ens type_interp::<T>() &*& Ref_own::<'a1, T>(t, Ref::<'a1, T> { refcell: v.refcell as *_ });
+{
+    assume(false);
+}
+
+lem Ref_send<'a, T>(t1: thread_id_t)
+    req type_interp::<T>() &*& Ref_own::<'a, T>(?t0, ?v);
+    ens type_interp::<T>() &*& Ref_own::<'a, T>(t1, v);
+{
+    assume(false);
+}
+
+@*/
+
 impl<'a, T> Drop for Ref<'a, T> {
     fn drop(&mut self) {
+        //@ open Ref_full_borrow_content::<'a, T>(_t, self)();
+        //@ open Ref_own::<'a, T>(_t, ?s);
         unsafe {
-            *self.refcell.immutable_borrows.get() = *self.refcell.immutable_borrows.get() - 1;
+            //@ assert [_]exists::<lifetime_t>(?k);
+            //@ assert [_]exists::<i32>(?gid);
+            //@ assert Ref_refcell::<'a, T>(self, ?cell);
+            //@ assert [_]nonatomic_borrow('a, _t, ?mask, na_borrow_content(ref_origin(cell), _t, k, gid));
+            //@ open thread_token(_t);
+            //@ thread_token_split(_t, MaskTop, mask);
+            //@ open_nonatomic_borrow('a, _t, mask, _q_a);
+            //@ open na_borrow_content::<T>(ref_origin(cell), _t, k, gid)();
+            let current_borrows = *self.refcell.immutable_borrows.get();
+            if let Some(new_borrows) = current_borrows.checked_sub(1) {
+                *self.refcell.immutable_borrows.get() = new_borrows;
+            } else {
+                process::abort();
+            }
+            //@ destroy_ticket(dlft_pred, gid);
+            //@ assert partial_thread_token(_t, ?mask0);
+            //@ close na_borrow_content::<T>(ref_origin(cell), _t, k, gid)();
+            //@ close_nonatomic_borrow();
+            //@ thread_token_merge(_t, mask0, mask);
+            //@ close thread_token(_t);
+            //@ close exists(k);
+            //@ close Ref_share::<'a, T>('a, _t, self);
+            //@ leak Ref_share::<'a, T>('a, _t, self);
         }
     }
 }
@@ -375,6 +554,7 @@ impl<'a, T> Deref for Ref<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
+        //@ open [?qshr]Ref_share::<'a, T>(_, _t, self);
         unsafe {
             let r = &*self.refcell.value.get();
             r
