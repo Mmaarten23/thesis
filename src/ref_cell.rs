@@ -17,9 +17,8 @@ pub struct RefCell<T> {
 
 /*@
 pred hidden_lifetime_token(k: lifetime_t;) = lifetime_token(k);
-fix dlft0() -> lifetime_t { default_value }
 
-pred dlft_pred(gid: usize; value: pair<lifetime_t, bool>) = ghost_cell(gid, value) &*& if snd(value) || fst(value) == dlft0() { true } else { lifetime_token(fst(value)) };
+pred dlft_pred(gid: i32; value: pair<lifetime_t, bool>) = ghost_cell(gid, value) &*& if !snd(value) && fst(value) != default_value { lifetime_token(fst(value)) } else { true };
 
 
 lem init_ref_RefCell<T>(p: *RefCell<T>)
@@ -46,11 +45,10 @@ pred_ctor na_borrow_content<T>(ptr: *RefCell<T>, t: thread_id_t, klong: lifetime
     immutables >= 0 &*&
     immutables <= usize::MAX &*&
     counting(dlft_pred, gid, immutables, ?value) &*&
-    value == pair(?dlft, ?destroyed) &*&
+    value == pair(?dlft_max, ?destroyed) &*&
     if !borrowed {
         if immutables > 0 {
-            lifetime_inclusion(dlft, klong) == true &*&
-            [_](<T>.share)(dlft, t, &(*ptr).value)
+            [_](<T>.share)(lifetime_intersection(klong, dlft_max), t, &(*ptr).value)
         } else {
             full_borrow(klong, <T>.full_borrow_content(t, &(*ptr).value))
         }
@@ -117,7 +115,8 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
     points_to_limits(&(*l).value);
     close_full_borrow_content(t, &(*l).value);
     close_full_borrow_m(<T>.full_borrow_content(t, &(*l).value));
-    let gid = create_ghost_cell::<pair<lifetime_t, bool>>(pair(dlft0, false));
+    let def = default_value as lifetime_t;
+    let gid = create_ghost_cell::<pair<lifetime_t, bool>>(pair(def, false));
     close exists(gid);
 
 
@@ -148,18 +147,18 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
             start_counting(dlft_pred, gid);
         }
         else if borrowed == false && immutables > 0 {
-            let newlft = begin_lifetime_m();
-            let dlft = lifetime_intersection(k, newlft);
+            let dlft_max = begin_lifetime_m();
+            let dlft = lifetime_intersection(k, dlft_max);
             reborrow_m(dlft, k, <T>.full_borrow_content(t, &(*l).value));
             assert [?qk]lifetime_token(k);
             lifetime_token_inv(k);
             if qk < 1 { }
-            close_lifetime_intersection_token(qk, k, newlft);
-            ghost_cell_mutate(gid, pair(dlft, true));
+            close_lifetime_intersection_token(qk, k, dlft_max);
+            ghost_cell_mutate(gid, pair(dlft_max, true));
             start_counting(dlft_pred, gid);
             let i = 0;
             while i < immutables
-                inv i <= immutables &*& counting(dlft_pred, gid, i, pair(dlft, true));
+                inv i <= immutables &*& counting(dlft_pred, gid, i, pair(dlft_max, true));
                 decreases immutables - i;
             {
                 create_ticket(dlft_pred, gid);
@@ -168,10 +167,10 @@ lem RefCell_share_full<T>(k: lifetime_t, t: thread_id_t, l: *RefCell<T>)
                 i = i + 1;
             }
             share_full_borrow_m::<T>(dlft, t, &(*l).value);
-            open_lifetime_intersection_token(qk, k, newlft);
-            end_lifetime_m(newlft);
-            lifetime_intersection_symm(k, newlft);
-            close_lifetime_intersection_dead_token(newlft, k);
+            open_lifetime_intersection_token(qk, k, dlft_max);
+            end_lifetime_m(dlft_max);
+            lifetime_intersection_symm(k, dlft_max);
+            close_lifetime_intersection_dead_token(dlft_max, k);
             end_reborrow_m(dlft, k, <T>.full_borrow_content(t, &(*l).value));
             leak full_borrow(_, <T>.full_borrow_content(t, &(*l).value));
         } 
@@ -248,8 +247,11 @@ impl<T> RefCell<T> {
             //@ thread_token_split(_t, MaskTop, mask);
             //@ open_nonatomic_borrow('a, _t, mask, _q_a / 2);
             //@ open na_borrow_content::<T>(ref_origin(this), _t, klong, gid)();
+            //@ assert RefCell_mutably_borrowed::<T>(ref_origin(this), ?borrowed);
             //@ assert RefCell_immutable_borrows::<T>(ref_origin(this), ?immutables);
-
+            if *this.mutably_borrowed.get() { 
+                process::abort();
+            }
             let current_borrows = *this.immutable_borrows.get();
             if let Some(new_borrows) = current_borrows.checked_add(1) {
                 *this.immutable_borrows.get() = new_borrows;
@@ -257,33 +259,40 @@ impl<T> RefCell<T> {
                 process::abort();
             }
             //@ assert partial_thread_token(_t, ?mask0);
-            //@ close exists::<i32>(gid);
             /*@ if immutables == 0
                 {
-                    let newlft = begin_lifetime();
-                    let dlft = lifetime_intersection(klong, newlft);
+                    let dlft_max = begin_lifetime();
+                    assume(dlft_max != default_value);
+                    let dlft = lifetime_intersection(klong, dlft_max);
                     reborrow(dlft, klong, <T>.full_borrow_content(_t, &(*ref_origin(this)).value));
-                    assert [?qa2]lifetime_token('a);
-                    lifetime_token_trade('a, qa2, klong);
-                    assert [?q1]lifetime_token(klong);
-                    lifetime_token_inv(klong);
-                    if q1 < 1 { }
-                    close_lifetime_intersection_token(q1, klong, newlft);
-
+                    assert counting(dlft_pred, gid, immutables, pair(?old_dlft_max, ?old_destroyed));
                     stop_counting(dlft_pred, gid);
-                    ghost_cell_mutate(gid, pair(dlft, false));
-                    start_counting(dlft_pred, gid);
-                    let frac = create_ticket(dlft_pred, gid);
-                    open [frac]dlft_pred(gid, pair(?old_dlft, ?destroyed));
+                    open dlft_pred(gid, pair(old_dlft_max, old_destroyed));
+                    if old_dlft_max != default_value && !old_destroyed {
+                        end_lifetime(old_dlft_max);
+                    }
+                    
+                    ghost_cell_mutate(gid, pair(dlft_max, false));
+                    assert [?qa2]lifetime_token('a);
+                    lifetime_token_trade('a, qa2, klong);            
+                    assert [?qklong]lifetime_token(klong);
+                    lifetime_token_inv(klong);
 
+                    
+                    if qklong < 1 { }
+                    close_lifetime_intersection_token(qklong, klong, dlft_max);
 
                     share_full_borrow::<T>(dlft, _t, &(*ref_origin(this)).value);
-                    open_lifetime_intersection_token(q1, klong, newlft);
-                    lifetime_token_trade_back(q1, klong);
-                    leak end_reborrow_token(_,_,_);
-                    leak exists(gid);
-                    leak exists(dlft);
-                    leak lifetime_token(newlft);
+                    
+                    open_lifetime_intersection_token(qklong, klong, dlft_max);
+
+                    start_counting(dlft_pred, gid);
+                    
+                    lifetime_token_trade_back(qklong, klong);
+                    
+                    let frac = create_ticket(dlft_pred, gid);
+                    open [frac]dlft_pred(gid, pair(dlft_max, false));
+                    leak end_reborrow_token(dlft, klong, <T>.full_borrow_content(_t, &(*ref_origin(this)).value));
 
                 } else {
                     let frac = create_ticket(dlft_pred, gid);
@@ -295,7 +304,6 @@ impl<T> RefCell<T> {
             //@ close thread_token(_t);
         }
         //@ assert [_](<T>.share)(?dlft, _t, &(*ref_origin(this)).value);
-        //@ close exists(dlft);
         let r = Ref { refcell: this };
         //@ leak exists(klong);
         //@ close Ref_own::<'a, T>(_t, r);
@@ -450,25 +458,53 @@ impl<'a, T> Deref for RefMut<'a, T> {
 /*@
 
 pred<'a, T> <Ref<'a, T>>.own(t, cell) =
-    [_]exists(?k) &*&
-    lifetime_inclusion('a, k) == true &*&
     pointer_within_limits(&(*cell.refcell).value) == true &*&
     [_]exists::<i32>(?gid) &*&
     ticket(dlft_pred, gid, ?frac) &*&
-    [frac]dlft_pred(gid, pair(?dlft, ?destroyed)) &*&
-    [_](<T>.share)(dlft, t, &(*ref_origin(cell.refcell)).value) &*&
-    [_]nonatomic_borrow('a, t, MaskNshrSingle(ref_origin(cell.refcell)), na_borrow_content::<T>(ref_origin(cell.refcell), t, k, gid));
+    [frac]dlft_pred(gid, pair(?dlft_max, false)) &*&
+    [_]exists(?klong) &*&
+    [_](<T>.share)(lifetime_intersection(klong, dlft_max), t, &(*ref_origin(cell.refcell)).value) &*&
+    [_]nonatomic_borrow('a, t, MaskNshrSingle(ref_origin(cell.refcell)), na_borrow_content::<T>(ref_origin(cell.refcell), t, klong, gid));
 
-/*pred<'a, T> <Ref<'a, T>>.share(k, t, cell) =
-    [_](<T>.share)(?dlft, t, &(*ref_origin((*cell).refcell)).value);
+pred_ctor  Ref_frac_bc(dlft: lifetime_t)(;) = lifetime_token(dlft);
+
+pred<'a, T> <Ref<'a, T>>.share(k, t, cell) = 
+    Ref_refcell(cell, ?refcell) &*&
+    [_]exists::<lifetime_t>(?klong) &*&
+    [_]exists::<lifetime_t>(?dlft_max) &*&
+    [_](<T>.share)(lifetime_intersection(klong, dlft_max), t, &(*ref_origin(refcell)).value) &*&
+    [_]exists(?frac) &*&
+    [_]frac_borrow(k, lifetime_token_(frac, lifetime_intersection(klong, dlft_max)));
+
+pred_ctor ticket_(dlft: lifetime_t, gid: i32, frac: real)(;) = ticket(dlft_pred, gid, frac) &*& [frac]ghost_cell(gid, pair(dlft, false));
+
+pred_ctor Ctx<'a, T>(dlft_max: lifetime_t, t: thread_id_t, gid: isize, l: *Ref<'a, T>)() =
+    [_]exists(dlft_max) &*& [_]exists(?klong) &*& [_]exists::<i32>(gid) &*& Ref_refcell(l, ?refcell) &*&
+    [_](<T>.share)(lifetime_intersection(klong, dlft_max), t, &(*ref_origin(refcell)).value);
 
 lem Ref_share_full<'a, T>(k: lifetime_t, t: thread_id_t, l: *Ref<'a, T>)
     req type_interp::<T>() &*& atomic_mask(MaskTop) &*& full_borrow(k, Ref_full_borrow_content::<'a, T>(t, l)) &*& [?q]lifetime_token(k) &*& l == ref_origin(l);
     ens type_interp::<T>() &*& atomic_mask(MaskTop) &*& [_]Ref_share::<'a, T>(k, t, l) &*& [q]lifetime_token(k);
 {
-    open_full_borrow_m(q, k, Ref_full_borrow_content(t, l));
+    let klong = open_full_borrow_strong_m(k, Ref_full_borrow_content(t, l), q);
     open Ref_full_borrow_content::<'a, T>(t, l)();
-}*/
+    open Ref_own::<'a, T>(t, ?refcell);
+    assert [_]exists::<i32>(?gid) &*& ticket(dlft_pred, gid, ?frac) &*& [frac]dlft_pred(gid, pair(?dlft_max, false));
+    close sep(ticket_(dlft_max, gid, frac), lifetime_token_(frac, dlft_max))();
+    produce_lem_ptr_chunk full_borrow_convert_strong(Ctx(dlft_max, t, gid, l), sep(ticket_(dlft_max, gid, frac), lifetime_token_(frac, dlft_max)), klong, Ref_full_borrow_content(t, l))() {
+           open sep(ticket_(dlft_max, gid, frac), lifetime_token_(frac, dlft_max))();
+           open ticket_(dlft_max, gid, frac)();
+           open Ctx::<'a, T>(dlft_max, t, gid, l)();
+           close [frac]dlft_pred(gid, pair(dlft_max, false));
+           close Ref_own::<'a, T>(t, refcell);
+           close Ref_full_borrow_content::<'a, T>(t, l)();
+        } {
+            close_full_borrow_strong_m(klong, Ref_full_borrow_content(t, l), Ref_full_borrow_content(t, l));
+        }
+    
+    close Ref_share::<'a, T>(k, t, l);
+    leak Ref_share::<'a, T>(k, t, l);
+}
 
 @*/
 pub struct Ref<'a, T> {
@@ -481,7 +517,11 @@ lem Ref_share_mono<'a, T>(k: lifetime_t, k1: lifetime_t, t: thread_id_t, l: *_)
     req type_interp::<T>() &*& lifetime_inclusion(k1, k) == true &*& [_]Ref_share::<'a, T>(k, t, l);
     ens type_interp::<T>() &*& [_]Ref_share::<'a, T>(k1, t, l);
 {
-    assume(false);
+    open [?q]Ref_share::<'a, T>(k, t, l);
+    assert [_]frac_borrow(k, ?borrow);
+    frac_borrow_mono(k, k1, borrow);
+
+    close [q]Ref_share::<'a, T>(k1, t, l);
 }
 
 lem init_ref_Ref<'a, T>(p: *Ref<'a, T>)
