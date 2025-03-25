@@ -478,9 +478,10 @@ pred<'a, T> <Ref<'a, T>>.share(k, t, cell) =
 
 pred_ctor ticket_(dlft: lifetime_t, gid: i32, frac: real)(;) = ticket(dlft_pred, gid, frac) &*& [frac]ghost_cell(gid, pair(dlft, false));
 
-pred_ctor Ctx<'a, T>(dlft_max: lifetime_t, t: thread_id_t, gid: isize, l: *Ref<'a, T>)() =
-    [_]exists(dlft_max) &*& [_]exists(?klong) &*& [_]exists::<i32>(gid) &*& Ref_refcell(l, ?refcell) &*&
-    [_](<T>.share)(lifetime_intersection(klong, dlft_max), t, &(*ref_origin(refcell)).value);
+pred_ctor Ctx<'a, T>(dlft_max: lifetime_t, klong: lifetime_t, t: thread_id_t, gid: isize, l: *Ref<'a, T>, refcell: *RefCell<T>)() =
+    [_]exists(dlft_max) &*& [_]exists(klong) &*& [_]exists::<i32>(gid) &*& Ref_refcell(l, refcell) &*&
+    [_](<T>.share)(lifetime_intersection(klong, dlft_max), t, &(*ref_origin(refcell)).value) &*&
+    [_]nonatomic_borrow('a, t, MaskNshrSingle(ref_origin(refcell)), na_borrow_content::<T>(ref_origin(refcell), t, klong, gid));
 
 lem Ref_share_full<'a, T>(k: lifetime_t, t: thread_id_t, l: *Ref<'a, T>)
     req type_interp::<T>() &*& atomic_mask(MaskTop) &*& full_borrow(k, Ref_full_borrow_content::<'a, T>(t, l)) &*& [?q]lifetime_token(k) &*& l == ref_origin(l);
@@ -489,17 +490,19 @@ lem Ref_share_full<'a, T>(k: lifetime_t, t: thread_id_t, l: *Ref<'a, T>)
     let klong = open_full_borrow_strong_m(k, Ref_full_borrow_content(t, l), q);
     open Ref_full_borrow_content::<'a, T>(t, l)();
     open Ref_own::<'a, T>(t, ?refcell);
+    let cell = (*l).refcell;
     assert [_]exists::<i32>(?gid) &*& ticket(dlft_pred, gid, ?frac) &*& [frac]dlft_pred(gid, pair(?dlft_max, false));
     close sep(ticket_(dlft_max, gid, frac), lifetime_token_(frac, dlft_max))();
-    produce_lem_ptr_chunk full_borrow_convert_strong(Ctx(dlft_max, t, gid, l), sep(ticket_(dlft_max, gid, frac), lifetime_token_(frac, dlft_max)), klong, Ref_full_borrow_content(t, l))() {
+    produce_lem_ptr_chunk full_borrow_convert_strong(Ctx(dlft_max, klong, t, gid, l, cell), sep(ticket_(dlft_max, gid, frac), lifetime_token_(frac, dlft_max)), klong, Ref_full_borrow_content(t, l))() {
            open sep(ticket_(dlft_max, gid, frac), lifetime_token_(frac, dlft_max))();
            open ticket_(dlft_max, gid, frac)();
-           open Ctx::<'a, T>(dlft_max, t, gid, l)();
+           open Ctx::<'a, T>(dlft_max, klong, t, gid, l, cell)();
            close [frac]dlft_pred(gid, pair(dlft_max, false));
            close Ref_own::<'a, T>(t, refcell);
            close Ref_full_borrow_content::<'a, T>(t, l)();
         } {
-            close_full_borrow_strong_m(klong, Ref_full_borrow_content(t, l), Ref_full_borrow_content(t, l));
+            close Ctx::<'a, T>(dlft_max, klong, t, gid, l, cell)();
+            close_full_borrow_strong_m(klong, Ref_full_borrow_content(t, l), sep(ticket_(dlft_max, gid, frac), lifetime_token_(frac, dlft_max)));
         }
     
     close Ref_share::<'a, T>(k, t, l);
